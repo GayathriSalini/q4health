@@ -164,6 +164,51 @@ function recordClientOutcome(state, action, outcome, receiptId) {
 function dispatchEffect(state, action) {
   const d = makeDispatch(state, action, null, 1); state.status = 'waiting'; return d;
 }
+
+async function planIncident(b) {
+  const ids = new Set();
+  for (const line of b.incident.transcript.split('\n')) { const m = /^\s*\[([^\]\s]+)\]/.exec(line); if (m) ids.add(m[1]); }
+  const deadline = Date.now() + 14000;
+  let messages = [{ role: 'system', content: SYSTEM }, { role: 'user', content: buildPrompt(b) }];
+  let last = null;
+  for (let k = 0; k < 2; k++) {
+    const left = deadline - Date.now();
+    if (left < 2500) break;
+    let plan;
+    try { plan = await llm(messages, left - 300); }
+    catch (e) { console.error('planner llm failed:', e.message); continue; }
+    let errs; try { errs = checkPlan(plan, b, ids); } catch { errs = ['malformed plan']; }
+    if (!errs.length) return plan;
+    console.error('plan rejected:', errs.join('; ').slice(0, 300));
+    last = plan;
+    messages = [...messages, { role: 'assistant', content: JSON.stringify(plan) }, { role: 'user', content: 'Fix these problems and return the full JSON again: ' + errs.join('; ') }];
+  }
+  return fallbackPlan(b, ids, last);
+}
+
+// Used only when the model fails: still a valid, safe plan so the run is created.
+function fallbackPlan(b, ids, last) {
+  const cat = b.toolCatalog, eff = b.policy.effectTools;
+  const diag = cat.find(t => !eff.includes(t.name));
+  const effect = cat.find(t => eff.includes(t.name) && !(b.policy.approvalRequiredFor || []).includes(t.name))
+    || cat.find(t => eff.includes(t.name));
+  const evs = [...ids].slice(0, 2);
+  const mk = (t) => { // minimal arguments from required string fields, filled with the incident service
+    const args = {};
+    for (const r of (t.inputSchema?.required || [])) {
+      const ty = t.inputSchema.properties?.[r]?.type;
+      args[r] = ty === 'integer' || ty === 'number' ? 1 : (/service/i.test(r) ? b.incident.service : String(b.incident.service));
+    }
+    return args;
+  };
+  return {
+    rootCause: last && b.incident.allowedRootCauses.includes(last.rootCause) ? last.rootCause : b.incident.allowedRootCauses[0],
+    evidence: evs,
+    diagnostics: [{ toolName: diag.name, arguments: mk(diag), evidence: [evs[0]] }],
+    effect: { toolName: effect.name, arguments: mk(effect), evidence: [evs[0]] },
+  };
+}
+
 function advance(state) {
   const diagnostics = state.actionLog.filter(a => a.phase === 'diagnostic');
   if (diagnostics.some(a => a.status === 'pending')) { state.status = 'waiting'; return []; }
