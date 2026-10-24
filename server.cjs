@@ -101,9 +101,9 @@ async function modelPlan(input, state) {
     const tools = new Map(input.toolCatalog.map(t => [t.name, t]));
     if (!Array.isArray(plan.diagnostics) || !plan.diagnostics.length || plan.diagnostics.length > Math.min(3, Number(input.policy.maximumDiagnostics || 3))) throw new Error('invalid_diagnostics');
     for (const d of plan.diagnostics) if (!d || !tools.has(d.toolName) || !d.arguments || typeof d.arguments !== 'object' || Array.isArray(d.arguments)) throw new Error('invalid_diagnostic_tool');
-    if (plan.effect != null && (!tools.has(plan.effect.toolName) || !Array.isArray(input.policy.effectTools || []).includes(plan.effect.toolName) || !plan.effect.arguments || typeof plan.effect.arguments !== 'object' || Array.isArray(plan.effect.arguments))) throw new Error('invalid_effect');
+    if (plan.effect != null && (!tools.has(plan.effect.toolName) || !(input.policy.effectTools || []).includes(plan.effect.toolName) || !plan.effect.arguments || typeof plan.effect.arguments !== 'object' || Array.isArray(plan.effect.arguments))) throw new Error('invalid_effect');
     endSpan(modelSpan); return { rootCause: plan.rootCause, evidence: plan.evidence, diagnostics: plan.diagnostics, effect: plan.effect || null };
-  } catch (e) { endSpan(modelSpan, 2, 'planning_failed'); throw new HttpError(502, 'Incident planning failed'); }
+  } catch (e) { console.error('planning failed:', e && e.message); endSpan(modelSpan, 2, 'planning_failed'); throw new HttpError(502, 'Incident planning failed'); }
   finally { clearTimeout(timer); }
 }
 function toolAllowed(input, name) { return input.toolCatalog.some(t => t.name === name); }
